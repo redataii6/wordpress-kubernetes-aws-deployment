@@ -1,5 +1,6 @@
 WordPress on Kubernetes with AWS EBS/EFS and ALB
-![diagram-export-7-9-2025-2_31_54-PM](https://github.com/user-attachments/assets/3289d182-90fe-4221-b7b4-964bcc5cc286)
+![diagram-export-7-9-2025-5_56_50-PM](https://github.com/user-attachments/assets/888d3d20-76c8-423d-bb40-96d9505013ab)
+
 
 
 
