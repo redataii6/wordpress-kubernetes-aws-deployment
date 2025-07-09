@@ -1,1 +1,0 @@
-# wordpress-kubernetes-aws-deployment
