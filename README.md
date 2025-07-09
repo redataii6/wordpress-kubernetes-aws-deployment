@@ -30,7 +30,8 @@ kubectl configured to communicate with your cluster
 
 Docker (optional, for local image testing)
 
-![Screenshot 2025-07-08 164238](https://github.com/user-attachments/assets/4c3991fe-58fc-4916-a40d-2385ad7a6bdf)
+![Screenshot 2025-07-08 164238](https://github.com/user-attachments/assets/83b03479-6d5c-4933-95d7-967a0b0a3f4f)
+
 
 🔄 Scaling and Availability
 
