@@ -1,0 +1,413 @@
+Instal CSI driver:
+# FOR EBS
+
+ubuntu@master:~$ kubectl apply -k "github.com/kubernetes-sigs/aws-ebs-csi-driver/deploy/kubernetes/overlays/stable/?ref=release-1.14"
+
+#FOR EFS
+ubuntu@master:~$ kubectl apply -k "github.com/kubernetes-sigs/aws-efs-csi-driver/deploy/kubernetes/overlays/stable/?ref=release-1.5"
+
+ubuntu@master:~$ kubectl get csidriver
+NAME              ATTACHREQUIRED   PODINFOONMOUNT   STORAGECAPACITY   TOKENREQUESTS   REQUIRESREPUBLISH   MODES        AGE
+ebs.csi.aws.com   true             false            false             <unset>         false               Persistent   50m
+efs.csi.aws.com   false            false            false             <unset>         false               Persistent   48m
+ubuntu@master:~$ kubectl get csinodes
+NAME     DRIVERS   AGE
+master   2         62m
+node1    2         51m
+node2    2         50m
+ubuntu@master:~$ kubectl create secret generic reda-project \
+> --namespace kube-system \
+> --from-literal "key_id=AKI************" \
+> --from-literal "access_key=HS***************"
+secret/reda-project created
+ubuntu@master:~$ kubectl get secret -n kube-system
+NAME                     TYPE                            DATA   AGE
+bootstrap-token-0vbsjg   bootstrap.kubernetes.io/token   6      54m
+bootstrap-token-xbye9z   bootstrap.kubernetes.io/token   7      65m
+reda-project             Opaque                          2      47s
+ubuntu@master:~$ ls
+WordPressPoject  cni-plugins-linux-amd64-v1.4.0.tgz  master.sh
+ubuntu@master:~$ cd WordPressPoject/
+ubuntu@master:~/WordPressPoject$ ls
+ubuntu@master:~/WordPressPoject$ # ---Create_a_secret_named_mysql-pass_that_stores_your_MySQL-password--- #
+ubuntu@master:~/WordPressPoject$ echo -n 'mypasswordsql' | openssl base64
+bXlwYXNzd29yZHNxbA==
+ubuntu@master:~/WordPressPoject$ # ---vim_secret_yaml--- #
+ubuntu@master:~/WordPressPoject$ vim secret.yaml
+ubuntu@master:~/WordPressPoject$ cat secret.yaml
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-pass
+type: Opaque
+data:
+  password: bXlwYXNzd29yZHNxbA==
+---
+ubuntu@master:~/WordPressPoject$ kubectl apply -f secret.yaml
+secret/mysql-pass created
+ubuntu@master:~/WordPressPoject$ kubectl get secret
+NAME         TYPE     DATA   AGE
+mysql-pass   Opaque   1      13s
+ubuntu@master:~/WordPressPoject$ kubectl describe secret mysql-pass
+Name:         mysql-pass
+Namespace:    default
+Labels:       <none>
+Annotations:  <none>
+
+Type:  Opaque
+
+Data
+====
+password:  13 bytes
+ubuntu@master:~/WordPressPoject$ # ---Create_a_StorageClass_for_storing_MySQL_database--- #
+ubuntu@master:~/WordPressPoject$ vim mysql-sc.yaml
+ubuntu@master:~/WordPressPoject$ cat mysql-sc.yaml
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: mysql-sc
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+---
+ubuntu@master:~/WordPressPoject$ kubectl apply -f mysql-sc.yaml
+storageclass.storage.k8s.io/mysql-sc created
+ubuntu@master:~/WordPressPoject$ kubectl get sc
+NAME       PROVISIONER       RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE
+mysql-sc   ebs.csi.aws.com   Delete          WaitForFirstConsumer   false                  5s
+ubuntu@master:~/WordPressPoject$ kubectl describe sc mysql-sc
+Name:            mysql-sc
+IsDefaultClass:  No
+Annotations:     kubectl.kubernetes.io/last-applied-configuration={"apiVersion":"storage.k8s.io/v1","kind":"StorageClass","metadata":{"annotations":{},"name":"mysql                -sc"},"provisioner":"ebs.csi.aws.com","volumeBindingMode":"WaitForFirstConsumer"}
+
+Provisioner:           ebs.csi.aws.com
+Parameters:            <none>
+AllowVolumeExpansion:  <unset>
+MountOptions:          <none>
+ReclaimPolicy:         Delete
+VolumeBindingMode:     WaitForFirstConsumer
+Events:                <none>
+ubuntu@master:~/WordPressPoject$ # ---Create_PVC--- #
+ubuntu@master:~/WordPressPoject$ vim mysql-pvc.yaml
+ubuntu@master:~/WordPressPoject$ cat mysql-pvc.yaml
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: mysql-sc  # you have to use the same name as the storage class you created before go back to the storage class file
+  resources:
+    requests:
+      storage: 5Gi
+---
+ubuntu@master:~/WordPressPoject$ kubectl apply -f mysql-pvc.yaml
+persistentvolumeclaim/mysql-pvc created
+ubuntu@master:~/WordPressPoject$ kubectl get pvc
+NAME        STATUS    VOLUME   CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+mysql-pvc   Pending                                      mysql-sc       <unset>                 4s
+ubuntu@master:~/WordPressPoject$ kubectl describe pvc mysql-pvc
+Name:          mysql-pvc
+Namespace:     default
+StorageClass:  mysql-sc
+Status:        Pending
+Volume:
+Labels:        <none>
+Annotations:   <none>
+Finalizers:    [kubernetes.io/pvc-protection]
+Capacity:
+Access Modes:
+VolumeMode:    Filesystem
+Used By:       <none>
+Events:
+  Type    Reason                Age               From                         Message
+  ----    ------                ----              ----                         -------
+  Normal  WaitForFirstConsumer  5s (x2 over 15s)  persistentvolume-controller  waiting for first consumer to be created before binding
+ubuntu@master:~/WordPressPoject$ #  ---Create_Deployment--- #
+ubuntu@master:~/WordPressPoject$ vim mysql-app.yaml
+ubuntu@master:~/WordPressPoject$ cat mysql-app.yaml
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql-app
+spec:
+  selector:
+    matchLabels:          # These MatchLabels are used by the deployment to select the right pods. What ever you write here should be the same as the labels in the                 pod template
+      app: wordpress
+      tier: mysql
+  template:
+    metadata:
+      labels:              # This is used to label the pods created by the deployment. These labels must match the selector above so the deployment can manage the c                orrect pods
+        app: wordpress
+        tier: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:5.6
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:           # Gets the value from a Kubernetes Secret
+                secretKeyRef:
+                  name: mysql-pass  #The name of the secret that stores the MySQL root password. Make sure it matches the name of the secret you created earlier. go                 back to the secret file and check the name.
+                  key: password     # The key inside the secret that contains the password. Make sure it matches the key used when you created the secret (e.g., pas                sword).
+          ports:
+            - containerPort: 3306
+          volumeMounts:
+            - name: mysql-storage
+              mountPath: /var/lib/mysql  # The path inside the container where MySQL stores its data.
+      volumes:
+        - name: mysql-storage     # This is the name of the volume that will be mounted to the MySQL container.
+          persistentVolumeClaim:
+            claimName: mysql-pvc  # The name of the PersistentVolumeClaim that you created earlier. This links the deployment to the storage.
+---
+ubuntu@master:~/WordPressPoject$ kubectl apply -f mysql-app.yaml
+deployment.apps/mysql-app created
+ubuntu@master:~/WordPressPoject$ kubectl get po
+NAME                        READY   STATUS              RESTARTS   AGE
+mysql-app-6956dfc54-vsqpl   0/1     ContainerCreating   0          11s
+ubuntu@master:~/WordPressPoject$ kubectl get po
+NAME                        READY   STATUS              RESTARTS   AGE
+mysql-app-6956dfc54-vsqpl   0/1     ContainerCreating   0          16s
+ubuntu@master:~/WordPressPoject$ kubectl get po
+NAME                        READY   STATUS    RESTARTS   AGE
+mysql-app-6956dfc54-vsqpl   1/1     Running   0          22s
+ubuntu@master:~/WordPressPoject$ kubectl get deploy
+NAME        READY   UP-TO-DATE   AVAILABLE   AGE
+mysql-app   1/1     1            1           30s
+ubuntu@master:~/WordPressPoject$ kubectl get pod -o wide
+NAME                        READY   STATUS    RESTARTS   AGE   IP           NODE    NOMINATED NODE   READINESS GATES
+mysql-app-6956dfc54-vsqpl   1/1     Running   0          52s   10.244.2.6   node2   <none>           <none>
+ubuntu@master:~/WordPressPoject$ kubectl get sc
+NAME       PROVISIONER       RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE
+mysql-sc   ebs.csi.aws.com   Delete          WaitForFirstConsumer   false                  39m
+ubuntu@master:~/WordPressPoject$ kubectl get pvc
+NAME        STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+mysql-pvc   Bound    pvc-67498c04-447a-4737-8970-473c6e747e2b   5Gi        RWO            mysql-sc       <unset>                 31m
+ubuntu@master:~/WordPressPoject$ kubectl get pv
+NAME                                       CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS   CLAIM               STORAGECLASS   VOLUMEATTRIBUTESCLASS   REASON   A                GE
+pvc-67498c04-447a-4737-8970-473c6e747e2b   5Gi        RWO            Delete           Bound    default/mysql-pvc   mysql-sc       <unset>                          7                3s
+ubuntu@master:~/WordPressPoject$ # ---Now_go_to_the_AWS_Console_you_should_see_a_new_volume_created_there--- #
+ubuntu@master:~/WordPressPoject$ # ---Create_a_ClusterIP_service_for_MySQL--- #
+ubuntu@master:~/WordPressPoject$ # --SVC--- #
+ubuntu@master:~/WordPressPoject$ vim mysql-svc.yaml
+ubuntu@master:~/WordPressPoject$ cat mysql-s
+mysql-sc.yaml   mysql-svc.yaml
+ubuntu@master:~/WordPressPoject$ cat mysql-svc.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-svc
+spec:
+  selector:       # This selector matches the labels of the pods created by the MySQL deployment
+    app: wordpress # Make sure this matches the labels in the deployment
+    tier: mysql     # Make sure this matches the labels in the deployment
+  ports:
+    - port: 3306 # The port on which the service will be exposed.
+---
+ubuntu@master:~/WordPressPoject$ kubectl apply -f mysql-svc.yaml
+service/mysql-svc created
+ubuntu@master:~/WordPressPoject$ kubectl get svc
+NAME         TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)        AGE
+kubernetes   ClusterIP   10.96.0.1        <none>        443/TCP        154m
+kubeview     NodePort    10.110.231.57    <none>        80:32441/TCP   20m
+mysql-svc    ClusterIP   10.111.158.149   <none>        3306/TCP       6s
+ubuntu@master:~/WordPressPoject$ # ---WordPress--- #
+ubuntu@master:~/WordPressPoject$ # ---Deploy_WordPress_Application--- #
+ubuntu@master:~/WordPressPoject$ # ---Create_a_Storage_Class_for_wordpress_using_EFS--- #
+ubuntu@master:~/WordPressPoject$ vim wordpress-sc.yaml
+ubuntu@master:~/WordPressPoject$ cat wordpress-sc.yaml
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: efs-sc
+provisioner: efs.csi.aws.com
+---
+ubuntu@master:~/WordPressPoject$ kubectl apply -f wordpress-sc.yaml
+storageclass.storage.k8s.io/efs-sc created
+ubuntu@master:~/WordPressPoject$ kubectl get sc
+NAME       PROVISIONER       RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE
+efs-sc     efs.csi.aws.com   Delete          Immediate              false                  5s
+mysql-sc   ebs.csi.aws.com   Delete          WaitForFirstConsumer   false                  84m
+ubuntu@master:~/WordPressPoject$ #
+ubuntu@master:~/WordPressPoject$ # ---Create_an_EFS_file_system_and_access_point_in_the_AWS_console_then_get_their_IDs--- #
+ubuntu@master:~/WordPressPoject$ # ---Create_Persistent_Volume__PV--- #
+ubuntu@master:~/WordPressPoject$ vim wordpress-pv.yaml
+ubuntu@master:~/WordPressPoject$ cat wordpress-pv.yaml
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: wordpress-efs-pv
+spec:
+  capacity:
+    storage: 5Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: efs-sc   # Here, specify the name of the StorageClass you created earlier (efs-sc). This links the PersistentVolume to the correct StorageClass.
+  csi:
+    drivers: efs.csi.aws.com # Here, specify the CSI driver name, which should match the StorageClass provisioner (e.g., efs.csi.aws.com).
+    volumeHandle: fs-01454ca8b588f2d41::fsap-0fd51eb91e39a8083  # volumeHandle is the unique identifier for your EFS file system and access point.Make sure to use your actual EFS FileSystem ID and Access Point ID in this format:<FileSystemID>::<AccessPointID>
+---
+ubuntu@master:~/WordPressPoject$ kubectl apply -f wordpress-pv.yaml
+Error from server (BadRequest): error when creating "wordpress-pv.yaml": PersistentVolume in version "v1" cannot be handled as a PersistentVolume: strict decoding error: unknown field "spec.csi.drivers"
+ubuntu@master:~/WordPressPoject$ vim wordpress-pv.yaml
+ubuntu@master:~/WordPressPoject$ kubectl apply -f wordpress-pv.yaml
+persistentvolume/wordpress-efs-pv created
+ubuntu@master:~/WordPressPoject$ kubectl get pv
+NAME                                       CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS      CLAIM               STORAGECLASS   VOLUMEATTRIBUTESCLASS   REASON   AGE
+pvc-67498c04-447a-4737-8970-473c6e747e2b   5Gi        RWO            Delete           Bound       default/mysql-pvc   mysql-sc       <unset>                          78m
+wordpress-efs-pv                           5Gi        RWX            Retain           Available                       efs-sc         <unset>                          5s
+ubuntu@master:~/WordPressPoject$ # ---Create_the_PersistentVolumeClaim_PVC_YAML_file--- #
+ubuntu@master:~/WordPressPoject$ vim wordpress-pvc.yaml
+ubuntu@master:~/WordPressPoject$ cat wordpress-pvc.yaml
+---
+apiVersion: v1
+kind: PersistentVolumeClaim  # Declare this resource as a PVC
+metadata:
+  name: wordpress-efs-pvc    # Name of the PVC
+spec:
+  accessModes:
+    - ReadWriteMany          # Must match the PV's accessModes
+  storageClassName: efs-sc   # Must match the PV's storageClassName
+  resources:
+    requests:
+      storage: 5Gi           # Must be equal to or less than the PV's storage
+---
+ubuntu@master:~/WordPressPoject$ kubectl apply -f wordpress-pvc.yaml
+persistentvolumeclaim/wordpress-efs-pvc created
+ubuntu@master:~/WordPressPoject$ kubectl get pvc
+NAME                STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+mysql-pvc           Bound    pvc-67498c04-447a-4737-8970-473c6e747e2b   5Gi        RWO            mysql-sc       <unset>                 124m
+wordpress-efs-pvc   Bound    wordpress-efs-pv                           5Gi        RWX            efs-sc         <unset>                 5s
+ubuntu@master:~/WordPressPoject$ kubectl get pv
+NAME                                       CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS   CLAIM                       STORAGECLASS   VOLUMEATTRIBUTESCLASS   REASON   AGE
+pvc-67498c04-447a-4737-8970-473c6e747e2b   5Gi        RWO            Delete           Bound    default/mysql-pvc           mysql-sc       <unset>                          94m
+wordpress-efs-pv                           5Gi        RWX            Retain           Bound    default/wordpress-efs-pvc   efs-sc         <unset>                          15m
+ubuntu@master:~/WordPressPoject$ # ---Creaet_Deployment_manifest_for_WordPress--- #
+ubuntu@master:~/WordPressPoject$ vim wordprees-app.yaml
+ubuntu@master:~/WordPressPoject$ mv wordprees-app.yaml wordpress-app.yaml
+ubuntu@master:~/WordPressPoject$ cat wordpress-app.yaml
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wordpress               # Deployment name for WordPress app
+spec:
+  selector:
+    matchLabels:
+      app: wordpress            # Select pods with label app=wordpress
+      tier: frontend            # Select pods with label tier=frontend
+  template:
+    metadata:
+      labels:
+        app: wordpress          # Pod label app=wordpress
+        tier: frontend          # Pod label tier=frontend
+    spec:
+      containers:
+        - name: wordpress
+          image: wordpress:php7.1-apache   # WordPress image with PHP 7.1 Apache
+          env:
+            - name: WORDPRESS_DB_HOST
+              value: mysql-svc                 # Reference to MySQL service name
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-pass             # Kubernetes secret name for DB password
+                  key: password                # Key inside the secret holding the password
+          ports:
+            - containerPort: 80                 # Container port exposing HTTP
+          volumeMounts:
+            - mountPath: /var/www/html          # WordPress persistent storage path
+              name: wordpress-storage           # Reference to volume defined below
+      volumes:
+        - name: wordpress-storage
+          persistentVolumeClaim:
+            claimName: wordpress-efs-pvc        # PVC name that uses EFS StorageClass
+---
+ubuntu@master:~/WordPressPoject$ kubectl apply -f wordpress-app.yaml
+deployment.apps/wordpress created
+ubuntu@master:~/WordPressPoject$ kubectl get deploy
+NAME        READY   UP-TO-DATE   AVAILABLE   AGE
+kubeview    0/1     1            0           127m
+mysql-app   1/1     1            1           142m
+wordpress   1/1     1            1           17s
+ubuntu@master:~/WordPressPoject$ kubectl get po -o wide
+NAME                         READY   STATUS             RESTARTS   AGE    IP           NODE    NOMINATED NODE   READINESS GATES
+kubeview-6576cc4664-ccdf9    0/1     ImagePullBackOff   0          127m   10.244.1.7   node1   <none>           <none>
+mysql-app-6956dfc54-vsqpl    1/1     Running            0          142m   10.244.2.6   node2   <none>           <none>
+wordpress-84884c6f97-x7v6q   1/1     Running            0          25s    10.244.2.7   node2   <none>           <none>
+ubuntu@master:~/WordPressPoject$ # ---NOW_TRY_TO_SCALE_PODS_WORDPRESS--- #
+ubuntu@master:~/WordPressPoject$ kubectl scale deploy wordpress --replicas=2
+deployment.apps/wordpress scaled
+ubuntu@master:~/WordPressPoject$ kubectl get po -o wide
+NAME                         READY   STATUS              RESTARTS        AGE    IP           NODE    NOMINATED NODE   READINESS GATES
+mysql-app-6956dfc54-vsqpl    1/1     Running             0               153m   10.244.2.6   node2   <none>           <none>
+wordpress-84884c6f97-f8p6w   0/1     ContainerCreating   0               8s     <none>       node1   <none>           <none>
+wordpress-84884c6f97-x7v6q   1/1     Running             2 (9m29s ago)   10m    10.244.2.7   node2   <none>           <none>
+ubuntu@master:~/WordPressPoject$ kubectl get po -o wide
+NAME                         READY   STATUS    RESTARTS        AGE    IP           NODE    NOMINATED NODE   READINESS GATES
+mysql-app-6956dfc54-vsqpl    1/1     Running   0               153m   10.244.2.6   node2   <none>           <none>
+wordpress-84884c6f97-f8p6w   1/1     Running   0               21s    10.244.1.9   node1   <none>           <none>
+wordpress-84884c6f97-x7v6q   1/1     Running   2 (9m42s ago)   10m    10.244.2.7   node2   <none>           <none>
+ubuntu@master:~/WordPressPoject$ kubectl get deploy
+NAME        READY   UP-TO-DATE   AVAILABLE   AGE
+mysql-app   1/1     1            1           153m
+wordpress   2/2     2            2           11m
+ubuntu@master:~/WordPressPoject$ # ---We_set_up_a_Kubernetes_Service_using_the_LoadBalancer_type--- #
+ubuntu@master:~/WordPressPoject$ vim wordpress-svc.yaml
+ubuntu@master:~/WordPressPoject$ cat wordpress-svc.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wordpress-svc   # Service name to expose WordPress
+spec:
+  selector:
+    app: wordpress      # Select pods with label app=wordpress
+    tier: frontend      # Select pods with label tier=frontend
+  ports:
+    - port: 80          # Service listens on port 80
+  type: LoadBalancer    # Creates an AWS Load Balancer to expose service externally
+---
+ubuntu@master:~/WordPressPoject$ kubectl apply -f wordpress-svc.yaml
+service/wordpress-svc created
+ubuntu@master:~/WordPressPoject$ kubectl get svc
+NAME            TYPE           CLUSTER-IP       EXTERNAL-IP   PORT(S)        AGE
+kubernetes      ClusterIP      10.96.0.1        <none>        443/TCP        4h55m
+mysql-svc       ClusterIP      10.111.158.149   <none>        3306/TCP       141m
+wordpress-svc   LoadBalancer   10.109.239.193   <pending>     80:31900/TCP   6s
+ubuntu@master:~/WordPressPoject$ kubectl get svc
+NAME            TYPE           CLUSTER-IP       EXTERNAL-IP   PORT(S)        AGE
+kubernetes      ClusterIP      10.96.0.1        <none>        443/TCP        5h40m
+mysql-svc       ClusterIP      10.111.158.149   <none>        3306/TCP       3h6m
+wordpress-svc   LoadBalancer   10.109.239.193   <pending>     80:31900/TCP   45m
+ubuntu@master:~/WordPressPoject$
+ubuntu@master:~/WordPressPoject$ # ---IF_YOU_WANNA_DELETE_ALL_RESOURCES--- #
+ubuntu@master:~/WordPressPoject$ cd ~
+ubuntu@master:~$ ls
+WordPressPoject  cni-plugins-linux-amd64-v1.4.0.tgz  kubeview.yaml  master.sh
+ubuntu@master:~$ kubectl delete -f WordPressPoject/
+deployment.apps "mysql-app" deleted
+persistentvolumeclaim "mysql-pvc" deleted
+storageclass.storage.k8s.io "mysql-sc" deleted
+service "mysql-svc" deleted
+secret "mysql-pass" deleted
+deployment.apps "wordpress" deleted
+persistentvolume "wordpress-efs-pv" deleted
+persistentvolumeclaim "wordpress-efs-pvc" deleted
+storageclass.storage.k8s.io "efs-sc" deleted
+service "wordpress-svc" deleted
+ubuntu@master:~$
+
+-# ⚠️ Don't forget to delete the following AWS resources manually after the project:
+# - EFS (Elastic File System)
+# - ALB (Application Load Balancer)
+# This helps prevent unexpected AWS charges for unused resources.
